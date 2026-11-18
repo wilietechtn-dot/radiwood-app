@@ -1,4 +1,3 @@
-
 "use client";
 
 import {
@@ -25,16 +24,11 @@ import {
   ShoppingCart,
   Trash2,
   Truck,
-  Wallet,
   X,
 } from "lucide-react";
 
 import {
-  addOrder,
   calculateOrderTotal,
-  deleteOrder,
-  getOrders,
-  updateOrder,
   ORDER_SOURCES,
   ORDER_STATUSES,
   type Order,
@@ -43,10 +37,7 @@ import {
   type PaymentStatus,
 } from "@/lib/orders";
 
-import {
-  getProducts,
-  type Product,
-} from "@/lib/products";
+import type { ProductDB } from "@/lib/products-db";
 
 type OrderForm = {
   customerName: string;
@@ -81,8 +72,7 @@ const PAGE_SIZE = 6;
 const inputClass =
   "w-full rounded-lg border border-[#DDD8CE] bg-white px-4 py-3 text-sm text-[#29271F] outline-none focus:border-[#405033]";
 
-const labelClass =
-  "mb-2 block text-xs font-semibold text-[#39362F]";
+const labelClass = "mb-2 block text-xs font-semibold text-[#39362F]";
 
 function getStatusStyle(status: OrderStatus) {
   switch (status) {
@@ -140,7 +130,7 @@ function getWhatsAppUrl(order: Order) {
 
 export default function AdminCommandesPage() {
   const [orders, setOrders] = useState<Order[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
+  const [products, setProducts] = useState<ProductDB[]>([]);
   const [loaded, setLoaded] = useState(false);
 
   const [search, setSearch] = useState("");
@@ -148,42 +138,53 @@ export default function AdminCommandesPage() {
   const [sourceFilter, setSourceFilter] = useState("Toutes");
   const [page, setPage] = useState(1);
 
-  const [modal, setModal] = useState<
-    "add" | "edit" | "view" | null
-  >(null);
-
-  const [activeOrder, setActiveOrder] =
-    useState<Order | null>(null);
-
-  const [form, setForm] =
-    useState<OrderForm>(EMPTY_FORM);
-
+  const [modal, setModal] = useState<"add" | "edit" | "view" | null>(null);
+  const [activeOrder, setActiveOrder] = useState<Order | null>(null);
+  const [form, setForm] = useState<OrderForm>(EMPTY_FORM);
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
 
-  const refresh = useCallback(() => {
-    setOrders(getOrders());
-    setProducts(getProducts());
+  /* ========================================
+     CHARGEMENT DEPUIS MONGODB
+  ======================================== */
+
+  const refresh = useCallback(async () => {
+    try {
+      const [ordersRes, productsRes] = await Promise.all([
+        fetch("/api/orders", { cache: "no-store" }),
+        fetch("/api/admin/products", { cache: "no-store" }),
+      ]);
+
+      const ordersData = (await ordersRes.json()) as {
+        success?: boolean;
+        orders?: Order[];
+      };
+      const productsData = (await productsRes.json()) as {
+        success?: boolean;
+        products?: ProductDB[];
+      };
+
+      if (ordersData.success && Array.isArray(ordersData.orders)) {
+        setOrders(ordersData.orders);
+      }
+
+      if (productsData.success && Array.isArray(productsData.products)) {
+        setProducts(productsData.products);
+      }
+    } catch (err) {
+      console.error("Erreur chargement commandes:", err);
+    } finally {
+      setLoaded(true);
+    }
   }, []);
 
   useEffect(() => {
     refresh();
-    setLoaded(true);
-
-    window.addEventListener(
-      "radiwood-orders-updated",
-      refresh
-    );
-
-    window.addEventListener("storage", refresh);
-
-    return () => {
-      window.removeEventListener(
-        "radiwood-orders-updated",
-        refresh
-      );
-      window.removeEventListener("storage", refresh);
-    };
   }, [refresh]);
+
+  /* ========================================
+     FILTRAGE & PAGINATION
+  ======================================== */
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -201,24 +202,17 @@ export default function AdminCommandesPage() {
 
         return (
           text.includes(query) &&
-          (statusFilter === "Tous" ||
-            order.status === statusFilter) &&
-          (sourceFilter === "Toutes" ||
-            order.source === sourceFilter)
+          (statusFilter === "Tous" || order.status === statusFilter) &&
+          (sourceFilter === "Toutes" || order.source === sourceFilter)
         );
       })
       .sort(
         (a, b) =>
-          new Date(b.createdAt).getTime() -
-          new Date(a.createdAt).getTime()
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       );
   }, [orders, search, statusFilter, sourceFilter]);
 
-  const totalPages = Math.max(
-    1,
-    Math.ceil(filtered.length / PAGE_SIZE)
-  );
-
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
 
   const visible = filtered.slice(
@@ -228,21 +222,13 @@ export default function AdminCommandesPage() {
 
   const stats = {
     total: orders.length,
-    pending: orders.filter(
-      (order) => order.status === "En attente"
-    ).length,
-    preparing: orders.filter(
-      (order) => order.status === "En préparation"
-    ).length,
-    delivered: orders.filter(
-      (order) => order.status === "Livrée"
-    ).length,
+    pending: orders.filter((order) => order.status === "En attente").length,
+    preparing: orders.filter((order) => order.status === "En préparation")
+      .length,
+    delivered: orders.filter((order) => order.status === "Livrée").length,
   };
 
-  function updateField(
-    field: keyof OrderForm,
-    value: string
-  ) {
+  function updateField(field: keyof OrderForm, value: string) {
     setForm((previous) => ({
       ...previous,
       [field]: value,
@@ -291,30 +277,27 @@ export default function AdminCommandesPage() {
   }
 
   function chooseProduct(name: string) {
-    const product = products.find(
-      (item) => item.name === name
-    );
+    const product = products.find((item) => item.name === name);
 
     setForm((previous) => ({
       ...previous,
       productName: name,
-      unitPrice: product
-        ? String(product.price)
-        : previous.unitPrice,
+      unitPrice: product ? String(product.price) : previous.unitPrice,
     }));
   }
 
-  function handleSave(event: FormEvent<HTMLFormElement>) {
+  /* ========================================
+     AJOUT / MODIFICATION (MONGODB)
+  ======================================== */
+
+  async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const quantity = Number(form.quantity);
     const unitPrice = Number(form.unitPrice);
     const deliveryFee = Number(form.deliveryFee);
 
-    if (
-      !form.customerName.trim() ||
-      !form.productName.trim()
-    ) {
+    if (!form.customerName.trim() || !form.productName.trim()) {
       setError("Veuillez remplir les champs obligatoires.");
       return;
     }
@@ -332,6 +315,9 @@ export default function AdminCommandesPage() {
       setError("Veuillez vérifier les quantités et les prix.");
       return;
     }
+
+    setSaving(true);
+    setError("");
 
     try {
       const item = {
@@ -352,56 +338,101 @@ export default function AdminCommandesPage() {
       };
 
       if (modal === "edit" && activeOrder) {
-        // La modification porte sur le premier article.
-        // Les autres articles sont conservés.
-        updateOrder(activeOrder.id, {
-          ...common,
-          items: [
-            item,
-            ...activeOrder.items.slice(1),
-          ],
+        const res = await fetch(`/api/orders/${activeOrder.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...common,
+            items: [item, ...activeOrder.items.slice(1)],
+          }),
         });
+
+        const data = (await res.json()) as {
+          success?: boolean;
+          error?: string;
+        };
+
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || "Impossible de modifier la commande.");
+        }
       } else {
-        addOrder({
-          ...common,
-          items: [item],
+        const res = await fetch("/api/orders", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...common,
+            items: [item],
+          }),
         });
+
+        const data = (await res.json()) as {
+          success?: boolean;
+          error?: string;
+        };
+
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || "Impossible d'ajouter la commande.");
+        }
       }
 
-      refresh();
+      await refresh();
       closeModal();
       setPage(1);
-    } catch {
+    } catch (err) {
       setError(
-        "Impossible d'enregistrer la commande dans le navigateur."
+        err instanceof Error
+          ? err.message
+          : "Impossible d'enregistrer la commande."
       );
+    } finally {
+      setSaving(false);
     }
   }
 
-  function changeStatus(
-    order: Order,
-    status: OrderStatus
-  ) {
+  /* ========================================
+     CHANGEMENT RAPIDE DE STATUT (MONGODB)
+  ======================================== */
+
+  async function changeStatus(order: Order, status: OrderStatus) {
+    setOrders((prev) =>
+      prev.map((o) => (o.id === order.id ? { ...o, status } : o))
+    );
+
     try {
-      updateOrder(order.id, { status });
-      refresh();
+      const res = await fetch(`/api/orders/${order.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+
+      if (!res.ok) {
+        throw new Error();
+      }
     } catch {
       window.alert("Impossible de modifier le statut.");
+      await refresh();
     }
   }
 
-  function removeOrder(order: Order) {
-    if (
-      !window.confirm(
-        `Supprimer la commande ${order.reference} ?`
-      )
-    ) {
+  /* ========================================
+     SUPPRESSION (MONGODB)
+  ======================================== */
+
+  async function removeOrder(order: Order) {
+    if (!window.confirm(`Supprimer la commande ${order.reference} ?`)) {
       return;
     }
 
     try {
-      deleteOrder(order.id);
-      refresh();
+      const res = await fetch(`/api/orders/${order.id}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) {
+        throw new Error();
+      }
+
+      setOrders((prev) => prev.filter((o) => o.id !== order.id));
     } catch {
       window.alert("Impossible de supprimer la commande.");
     }
@@ -410,9 +441,7 @@ export default function AdminCommandesPage() {
   return (
     <div className="min-h-[calc(100vh-90px)] bg-[#F7F2E8] px-5 py-8 text-[#29271F] md:px-9">
       <div className="mx-auto max-w-[1500px]">
-
         {/* HEADER */}
-
         <div className="mb-8 flex flex-col justify-between gap-5 md:flex-row md:items-center">
           <div>
             <p className="mb-3 text-sm font-semibold text-[#6C715F]">
@@ -439,7 +468,6 @@ export default function AdminCommandesPage() {
         </div>
 
         {/* STATS */}
-
         <div className="mb-7 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {[
             {
@@ -483,12 +511,10 @@ export default function AdminCommandesPage() {
                 </div>
 
                 <div>
-                  <p className="mb-2 text-sm">
-                    {stat.label}
-                  </p>
+                  <p className="mb-2 text-sm">{stat.label}</p>
 
                   <strong className="text-3xl">
-                    {stat.value}
+                    {loaded ? stat.value : "—"}
                   </strong>
                 </div>
               </div>
@@ -497,7 +523,6 @@ export default function AdminCommandesPage() {
         </div>
 
         {/* FILTRES */}
-
         <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-[1.5fr_1fr_1fr]">
           <div className="flex items-center gap-3 rounded-xl border border-[#DED8CE] bg-white px-4">
             <Search size={20} className="text-[#858075]" />
@@ -567,7 +592,6 @@ export default function AdminCommandesPage() {
         </div>
 
         {/* TABLEAU */}
-
         <div className="overflow-hidden rounded-xl border border-[#E8E0D5] bg-[#FFFCF8] shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full min-w-[1050px] border-collapse text-left">
@@ -633,9 +657,7 @@ export default function AdminCommandesPage() {
                         </span>
                       </td>
 
-                      <td className="px-4 py-4 text-xs">
-                        {order.source}
-                      </td>
+                      <td className="px-4 py-4 text-xs">{order.source}</td>
 
                       <td className="px-4 py-4">
                         <select
@@ -652,10 +674,7 @@ export default function AdminCommandesPage() {
                           )}`}
                         >
                           {ORDER_STATUSES.map((status) => (
-                            <option
-                              key={status}
-                              value={status}
-                            >
+                            <option key={status} value={status}>
                               {status}
                             </option>
                           ))}
@@ -700,10 +719,7 @@ export default function AdminCommandesPage() {
 
                 {loaded && visible.length === 0 && (
                   <tr>
-                    <td
-                      colSpan={8}
-                      className="py-20 text-center"
-                    >
+                    <td colSpan={8} className="py-20 text-center">
                       <ShoppingCart
                         size={40}
                         className="mx-auto mb-4 text-[#829273]"
@@ -718,11 +734,8 @@ export default function AdminCommandesPage() {
 
                 {!loaded && (
                   <tr>
-                    <td
-                      colSpan={8}
-                      className="py-16 text-center text-sm"
-                    >
-                      Chargement...
+                    <td colSpan={8} className="py-16 text-center text-sm">
+                      Chargement des commandes...
                     </td>
                   </tr>
                 )}
@@ -732,14 +745,11 @@ export default function AdminCommandesPage() {
         </div>
 
         {/* PAGINATION */}
-
         <div className="mt-8 flex flex-col items-center justify-between gap-5 sm:flex-row">
           <p className="text-sm text-[#817B70]">
             {filtered.length === 0
               ? "Aucune commande"
-              : `Affichage de ${
-                  (currentPage - 1) * PAGE_SIZE + 1
-                } à ${Math.min(
+              : `Affichage de ${(currentPage - 1) * PAGE_SIZE + 1} à ${Math.min(
                   currentPage * PAGE_SIZE,
                   filtered.length
                 )} sur ${filtered.length} commandes`}
@@ -749,39 +759,34 @@ export default function AdminCommandesPage() {
             <button
               type="button"
               disabled={currentPage === 1}
-              onClick={() =>
-                setPage(currentPage - 1)
-              }
+              onClick={() => setPage(currentPage - 1)}
               aria-label="Page précédente"
               className="rounded-lg border border-[#E7E1D8] bg-white p-3 disabled:opacity-40"
             >
               <ChevronLeft size={17} />
             </button>
 
-            {Array.from(
-              { length: totalPages },
-              (_, i) => i + 1
-            ).map((number) => (
-              <button
-                key={number}
-                type="button"
-                onClick={() => setPage(number)}
-                className={`h-10 w-10 rounded-lg text-sm font-semibold ${
-                  number === currentPage
-                    ? "bg-[#405033] text-white"
-                    : "bg-white text-[#625C52]"
-                }`}
-              >
-                {number}
-              </button>
-            ))}
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map(
+              (number) => (
+                <button
+                  key={number}
+                  type="button"
+                  onClick={() => setPage(number)}
+                  className={`h-10 w-10 rounded-lg text-sm font-semibold ${
+                    number === currentPage
+                      ? "bg-[#405033] text-white"
+                      : "bg-white text-[#625C52]"
+                  }`}
+                >
+                  {number}
+                </button>
+              )
+            )}
 
             <button
               type="button"
               disabled={currentPage === totalPages}
-              onClick={() =>
-                setPage(currentPage + 1)
-              }
+              onClick={() => setPage(currentPage + 1)}
               aria-label="Page suivante"
               className="rounded-lg border border-[#E7E1D8] bg-white p-3 disabled:opacity-40"
             >
@@ -792,7 +797,6 @@ export default function AdminCommandesPage() {
       </div>
 
       {/* MODALES */}
-
       {modal && (
         <div
           className="fixed inset-0 z-[200] flex items-center justify-center overflow-y-auto bg-black/60 p-4 backdrop-blur-sm"
@@ -840,45 +844,32 @@ export default function AdminCommandesPage() {
               <div className="max-h-[75vh] space-y-6 overflow-y-auto p-6">
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
-                    <p className="mb-1 text-xs text-[#827B70]">
-                      Client
-                    </p>
-                    <p className="font-semibold">
-                      {activeOrder.customerName}
-                    </p>
+                    <p className="mb-1 text-xs text-[#827B70]">Client</p>
+                    <p className="font-semibold">{activeOrder.customerName}</p>
                     <p className="mt-1 text-sm">
                       {activeOrder.phone || "Aucun numéro"}
                     </p>
                   </div>
 
                   <div>
-                    <p className="mb-1 text-xs text-[#827B70]">
-                      Date
-                    </p>
+                    <p className="mb-1 text-xs text-[#827B70]">Date</p>
                     <p className="font-semibold">
                       {formatDate(activeOrder.createdAt)}
                     </p>
-                    <p className="mt-1 text-sm">
-                      Source : {activeOrder.source}
-                    </p>
+                    <p className="mt-1 text-sm">Source : {activeOrder.source}</p>
                   </div>
 
                   <div>
-                    <p className="mb-1 text-xs text-[#827B70]">
-                      Livraison
-                    </p>
+                    <p className="mb-1 text-xs text-[#827B70]">Livraison</p>
                     <p className="text-sm">
                       {activeOrder.address || "Non précisée"}
                     </p>
                   </div>
 
                   <div>
-                    <p className="mb-1 text-xs text-[#827B70]">
-                      Statuts
-                    </p>
+                    <p className="mb-1 text-xs text-[#827B70]">Statuts</p>
                     <p className="text-sm">
-                      {activeOrder.status} —{" "}
-                      {activeOrder.paymentStatus}
+                      {activeOrder.status} — {activeOrder.paymentStatus}
                     </p>
                   </div>
                 </div>
@@ -894,44 +885,34 @@ export default function AdminCommandesPage() {
                       className="flex justify-between gap-4 border-t border-[#EEE8E0] px-4 py-4 text-sm"
                     >
                       <div>
-                        <p className="font-semibold">
-                          {item.productName}
-                        </p>
+                        <p className="font-semibold">{item.productName}</p>
                         <p className="text-xs text-[#817B70]">
                           Quantité : {item.quantity}
                         </p>
                       </div>
 
                       <p className="font-semibold">
-                        {formatPrice(
-                          item.quantity * item.unitPrice
-                        )}
+                        {formatPrice(item.quantity * item.unitPrice)}
                       </p>
                     </div>
                   ))}
 
                   <div className="flex justify-between border-t border-[#EEE8E0] px-4 py-3 text-sm">
                     <span>Livraison</span>
-                    <span>
-                      {formatPrice(activeOrder.deliveryFee)}
-                    </span>
+                    <span>{formatPrice(activeOrder.deliveryFee)}</span>
                   </div>
 
                   <div className="flex justify-between bg-[#E8EDDF] px-4 py-4 font-semibold text-[#405033]">
                     <span>Total</span>
                     <span>
-                      {formatPrice(
-                        calculateOrderTotal(activeOrder)
-                      )}
+                      {formatPrice(calculateOrderTotal(activeOrder))}
                     </span>
                   </div>
                 </div>
 
                 {activeOrder.notes && (
                   <div>
-                    <p className="mb-2 font-semibold">
-                      Notes
-                    </p>
+                    <p className="mb-2 font-semibold">Notes</p>
                     <p className="whitespace-pre-wrap text-sm text-[#716B61]">
                       {activeOrder.notes}
                     </p>
@@ -967,10 +948,7 @@ export default function AdminCommandesPage() {
               >
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
-                    <label
-                      htmlFor="order-client"
-                      className={labelClass}
-                    >
+                    <label htmlFor="order-client" className={labelClass}>
                       Nom du client *
                     </label>
                     <input
@@ -978,10 +956,7 @@ export default function AdminCommandesPage() {
                       required
                       value={form.customerName}
                       onChange={(event) =>
-                        updateField(
-                          "customerName",
-                          event.target.value
-                        )
+                        updateField("customerName", event.target.value)
                       }
                       placeholder="Nom complet"
                       className={inputClass}
@@ -989,10 +964,7 @@ export default function AdminCommandesPage() {
                   </div>
 
                   <div>
-                    <label
-                      htmlFor="order-phone"
-                      className={labelClass}
-                    >
+                    <label htmlFor="order-phone" className={labelClass}>
                       Téléphone
                     </label>
                     <input
@@ -1000,10 +972,7 @@ export default function AdminCommandesPage() {
                       type="tel"
                       value={form.phone}
                       onChange={(event) =>
-                        updateField(
-                          "phone",
-                          event.target.value
-                        )
+                        updateField("phone", event.target.value)
                       }
                       placeholder="Ex : +216 ..."
                       className={inputClass}
@@ -1012,20 +981,14 @@ export default function AdminCommandesPage() {
                 </div>
 
                 <div>
-                  <label
-                    htmlFor="order-address"
-                    className={labelClass}
-                  >
+                  <label htmlFor="order-address" className={labelClass}>
                     Adresse de livraison
                   </label>
                   <input
                     id="order-address"
                     value={form.address}
                     onChange={(event) =>
-                      updateField(
-                        "address",
-                        event.target.value
-                      )
+                      updateField("address", event.target.value)
                     }
                     placeholder="Ville et adresse"
                     className={inputClass}
@@ -1033,10 +996,7 @@ export default function AdminCommandesPage() {
                 </div>
 
                 <div>
-                  <label
-                    htmlFor="order-product"
-                    className={labelClass}
-                  >
+                  <label htmlFor="order-product" className={labelClass}>
                     Produit *
                   </label>
 
@@ -1045,29 +1005,21 @@ export default function AdminCommandesPage() {
                     required
                     list="radiwood-order-products"
                     value={form.productName}
-                    onChange={(event) =>
-                      chooseProduct(event.target.value)
-                    }
+                    onChange={(event) => chooseProduct(event.target.value)}
                     placeholder="Sélectionner ou saisir un produit"
                     className={inputClass}
                   />
 
                   <datalist id="radiwood-order-products">
                     {products.map((product) => (
-                      <option
-                        key={product.id}
-                        value={product.name}
-                      />
+                      <option key={product.id} value={product.name} />
                     ))}
                   </datalist>
                 </div>
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                   <div>
-                    <label
-                      htmlFor="order-quantity"
-                      className={labelClass}
-                    >
+                    <label htmlFor="order-quantity" className={labelClass}>
                       Quantité *
                     </label>
                     <input
@@ -1078,20 +1030,14 @@ export default function AdminCommandesPage() {
                       required
                       value={form.quantity}
                       onChange={(event) =>
-                        updateField(
-                          "quantity",
-                          event.target.value
-                        )
+                        updateField("quantity", event.target.value)
                       }
                       className={inputClass}
                     />
                   </div>
 
                   <div>
-                    <label
-                      htmlFor="order-price"
-                      className={labelClass}
-                    >
+                    <label htmlFor="order-price" className={labelClass}>
                       Prix unitaire (TND) *
                     </label>
                     <input
@@ -1102,20 +1048,14 @@ export default function AdminCommandesPage() {
                       required
                       value={form.unitPrice}
                       onChange={(event) =>
-                        updateField(
-                          "unitPrice",
-                          event.target.value
-                        )
+                        updateField("unitPrice", event.target.value)
                       }
                       className={inputClass}
                     />
                   </div>
 
                   <div>
-                    <label
-                      htmlFor="order-delivery"
-                      className={labelClass}
-                    >
+                    <label htmlFor="order-delivery" className={labelClass}>
                       Livraison (TND)
                     </label>
                     <input
@@ -1126,10 +1066,7 @@ export default function AdminCommandesPage() {
                       required
                       value={form.deliveryFee}
                       onChange={(event) =>
-                        updateField(
-                          "deliveryFee",
-                          event.target.value
-                        )
+                        updateField("deliveryFee", event.target.value)
                       }
                       className={inputClass}
                     />
@@ -1147,28 +1084,19 @@ export default function AdminCommandesPage() {
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                   <div>
-                    <label
-                      htmlFor="order-source"
-                      className={labelClass}
-                    >
+                    <label htmlFor="order-source" className={labelClass}>
                       Source
                     </label>
                     <select
                       id="order-source"
                       value={form.source}
                       onChange={(event) =>
-                        updateField(
-                          "source",
-                          event.target.value
-                        )
+                        updateField("source", event.target.value)
                       }
                       className={inputClass}
                     >
                       {ORDER_SOURCES.map((source) => (
-                        <option
-                          key={source}
-                          value={source}
-                        >
+                        <option key={source} value={source}>
                           {source}
                         </option>
                       ))}
@@ -1176,28 +1104,19 @@ export default function AdminCommandesPage() {
                   </div>
 
                   <div>
-                    <label
-                      htmlFor="order-status"
-                      className={labelClass}
-                    >
+                    <label htmlFor="order-status" className={labelClass}>
                       Statut
                     </label>
                     <select
                       id="order-status"
                       value={form.status}
                       onChange={(event) =>
-                        updateField(
-                          "status",
-                          event.target.value
-                        )
+                        updateField("status", event.target.value)
                       }
                       className={inputClass}
                     >
                       {ORDER_STATUSES.map((status) => (
-                        <option
-                          key={status}
-                          value={status}
-                        >
+                        <option key={status} value={status}>
                           {status}
                         </option>
                       ))}
@@ -1205,36 +1124,25 @@ export default function AdminCommandesPage() {
                   </div>
 
                   <div>
-                    <label
-                      htmlFor="order-payment"
-                      className={labelClass}
-                    >
+                    <label htmlFor="order-payment" className={labelClass}>
                       Paiement
                     </label>
                     <select
                       id="order-payment"
                       value={form.paymentStatus}
                       onChange={(event) =>
-                        updateField(
-                          "paymentStatus",
-                          event.target.value
-                        )
+                        updateField("paymentStatus", event.target.value)
                       }
                       className={inputClass}
                     >
-                      <option value="Non payé">
-                        Non payé
-                      </option>
+                      <option value="Non payé">Non payé</option>
                       <option value="Payé">Payé</option>
                     </select>
                   </div>
                 </div>
 
                 <div>
-                  <label
-                    htmlFor="order-notes"
-                    className={labelClass}
-                  >
+                  <label htmlFor="order-notes" className={labelClass}>
                     Notes
                   </label>
                   <textarea
@@ -1242,10 +1150,7 @@ export default function AdminCommandesPage() {
                     rows={3}
                     value={form.notes}
                     onChange={(event) =>
-                      updateField(
-                        "notes",
-                        event.target.value
-                      )
+                      updateField("notes", event.target.value)
                     }
                     placeholder="Informations supplémentaires..."
                     className={`${inputClass} resize-y`}
@@ -1256,9 +1161,8 @@ export default function AdminCommandesPage() {
                   activeOrder &&
                   activeOrder.items.length > 1 && (
                     <p className="rounded-lg bg-[#FFF0D6] p-3 text-xs text-[#875A18]">
-                      Cette fenêtre modifie le premier article.
-                      Les autres articles de la commande
-                      seront conservés.
+                      Cette fenêtre modifie le premier article. Les autres
+                      articles de la commande seront conservés.
                     </p>
                   )}
 
@@ -1282,10 +1186,13 @@ export default function AdminCommandesPage() {
 
                   <button
                     type="submit"
-                    className="flex items-center gap-2 rounded-xl bg-[#405033] px-6 py-3 text-sm font-semibold text-white"
+                    disabled={saving}
+                    className="flex items-center gap-2 rounded-xl bg-[#405033] px-6 py-3 text-sm font-semibold text-white disabled:opacity-60"
                   >
                     <Check size={17} />
-                    {modal === "add"
+                    {saving
+                      ? "Enregistrement..."
+                      : modal === "add"
                       ? "Ajouter la commande"
                       : "Enregistrer"}
                   </button>

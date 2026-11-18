@@ -1,4 +1,3 @@
-
 "use client";
 
 import {
@@ -24,17 +23,8 @@ import {
   X,
 } from "lucide-react";
 
-import {
-  type Category,
-  getCategories,
-  saveCategories,
-} from "@/lib/categories";
-
-import {
-  type Product,
-  getProducts,
-  saveProducts,
-} from "@/lib/products";
+import type { Category } from "@/lib/categories";
+import type { ProductDB } from "@/lib/products-db";
 
 /* ==========================================
    TYPES
@@ -60,20 +50,12 @@ const inputClass =
 ========================================== */
 
 async function processImage(file: File): Promise<string> {
-  if (
-    !["image/jpeg", "image/png", "image/webp"].includes(
-      file.type
-    )
-  ) {
-    throw new Error(
-      "Format non autorisé. Utilisez JPG, PNG ou WebP."
-    );
+  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+    throw new Error("Format non autorisé. Utilisez JPG, PNG ou WebP.");
   }
 
   if (file.size > 5 * 1024 * 1024) {
-    throw new Error(
-      "L'image ne doit pas dépasser 5 Mo."
-    );
+    throw new Error("L'image ne doit pas dépasser 5 Mo.");
   }
 
   return new Promise((resolve, reject) => {
@@ -85,26 +67,17 @@ async function processImage(file: File): Promise<string> {
     reader.onload = () => {
       const image = new window.Image();
 
-      image.onerror = () =>
-        reject(new Error("Image invalide."));
+      image.onerror = () => reject(new Error("Image invalide."));
 
       image.onload = () => {
         const canvas = document.createElement("canvas");
-
         const ratio = Math.min(
           1,
           700 / Math.max(image.width, image.height)
         );
 
-        canvas.width = Math.max(
-          1,
-          Math.round(image.width * ratio)
-        );
-
-        canvas.height = Math.max(
-          1,
-          Math.round(image.height * ratio)
-        );
+        canvas.width = Math.max(1, Math.round(image.width * ratio));
+        canvas.height = Math.max(1, Math.round(image.height * ratio));
 
         const ctx = canvas.getContext("2d");
 
@@ -113,14 +86,7 @@ async function processImage(file: File): Promise<string> {
           return;
         }
 
-        ctx.drawImage(
-          image,
-          0,
-          0,
-          canvas.width,
-          canvas.height
-        );
-
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
         resolve(canvas.toDataURL("image/jpeg", 0.7));
       };
 
@@ -136,27 +102,14 @@ async function processImage(file: File): Promise<string> {
 ========================================== */
 
 export default function AdminCategoriesPage() {
-  const [categories, setCategories] =
-    useState<Category[]>([]);
-
-  const [products, setProducts] =
-    useState<Product[]>([]);
-
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [products, setProducts] = useState<ProductDB[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [search, setSearch] = useState("");
-
-  const [openMenu, setOpenMenu] =
-    useState<string | null>(null);
-
-  const [modal, setModal] =
-    useState<"add" | "edit" | null>(null);
-
-  const [editingId, setEditingId] =
-    useState<string | null>(null);
-
-  const [form, setForm] =
-    useState<CategoryForm>(EMPTY_FORM);
-
+  const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [modal, setModal] = useState<"add" | "edit" | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<CategoryForm>(EMPTY_FORM);
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -164,43 +117,41 @@ export default function AdminCategoriesPage() {
   const fileInput = useRef<HTMLInputElement>(null);
 
   /* ========================================
-     CHARGEMENT
+     CHARGEMENT DEPUIS MONGODB
   ======================================== */
 
-  const refresh = useCallback(() => {
-    setCategories(getCategories());
-    setProducts(getProducts());
+  const refresh = useCallback(async () => {
+    try {
+      const [catRes, prodRes] = await Promise.all([
+        fetch("/api/categories", { cache: "no-store" }),
+        fetch("/api/admin/products", { cache: "no-store" }),
+      ]);
+
+      const catData = (await catRes.json()) as {
+        success?: boolean;
+        categories?: Category[];
+      };
+      const prodData = (await prodRes.json()) as {
+        success?: boolean;
+        products?: ProductDB[];
+      };
+
+      if (catData.success && Array.isArray(catData.categories)) {
+        setCategories(catData.categories);
+      }
+
+      if (prodData.success && Array.isArray(prodData.products)) {
+        setProducts(prodData.products);
+      }
+    } catch (err) {
+      console.error("Erreur chargement catégories:", err);
+    } finally {
+      setLoaded(true);
+    }
   }, []);
 
   useEffect(() => {
     refresh();
-    setLoaded(true);
-
-    window.addEventListener(
-      "radiwood-categories-updated",
-      refresh
-    );
-
-    window.addEventListener(
-      "radiwood-products-updated",
-      refresh
-    );
-
-    window.addEventListener("storage", refresh);
-
-    return () => {
-      window.removeEventListener(
-        "radiwood-categories-updated",
-        refresh
-      );
-
-      window.removeEventListener(
-        "radiwood-products-updated",
-        refresh
-      );
-
-      window.removeEventListener("storage", refresh);
-    };
   }, [refresh]);
 
   /* ========================================
@@ -224,7 +175,8 @@ export default function AdminCategoriesPage() {
 
   function countProducts(categoryName: string) {
     return products.filter(
-      (product) => product.category === categoryName
+      (product) =>
+        product.category.toLowerCase() === categoryName.toLowerCase()
     ).length;
   }
 
@@ -232,10 +184,7 @@ export default function AdminCategoriesPage() {
      FORMULAIRE
   ======================================== */
 
-  function updateField(
-    field: keyof CategoryForm,
-    value: string
-  ) {
+  function updateField(field: keyof CategoryForm, value: string) {
     setForm((previous) => ({
       ...previous,
       [field]: value,
@@ -280,11 +229,8 @@ export default function AdminCategoriesPage() {
      IMPORT IMAGE
   ======================================== */
 
-  async function handleFileChange(
-    event: ChangeEvent<HTMLInputElement>
-  ) {
+  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
-
     if (!file) return;
 
     setUploading(true);
@@ -292,13 +238,10 @@ export default function AdminCategoriesPage() {
 
     try {
       const result = await processImage(file);
-
       updateField("image", result);
-    } catch (error) {
+    } catch (err) {
       setError(
-        error instanceof Error
-          ? error.message
-          : "Impossible de charger l'image."
+        err instanceof Error ? err.message : "Impossible de charger l'image."
       );
     } finally {
       setUploading(false);
@@ -307,10 +250,10 @@ export default function AdminCategoriesPage() {
   }
 
   /* ========================================
-     ENREGISTRER UNE CATÉGORIE
+     ENREGISTRER UNE CATÉGORIE (MONGODB)
   ======================================== */
 
-  function handleSave(event: FormEvent<HTMLFormElement>) {
+  async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const name = form.name.trim();
@@ -338,64 +281,56 @@ export default function AdminCategoriesPage() {
     }
 
     setSaving(true);
+    setError("");
 
     try {
       if (modal === "edit" && editingId) {
-        const oldCategory = categories.find(
-          (item) => item.id === editingId
-        );
+        const res = await fetch(`/api/categories/${editingId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            description,
+            image: form.image,
+          }),
+        });
 
-        if (!oldCategory) {
-          throw new Error("Catégorie introuvable.");
-        }
-
-        const updatedCategories = categories.map(
-          (item) =>
-            item.id === editingId
-              ? {
-                  ...item,
-                  name,
-                  description,
-                  image: form.image,
-                }
-              : item
-        );
-
-        const oldProducts = getProducts();
-
-        const updatedProducts = oldProducts.map(
-          (product) =>
-            product.category === oldCategory.name
-              ? { ...product, category: name }
-              : product
-        );
-
-        // Renommer aussi la catégorie dans les produits.
-        // En cas d'échec, conserver la liste actuelle.
-        if (oldCategory.name !== name) {
-          saveProducts(updatedProducts);
-        }
-
-        saveCategories(updatedCategories);
-      } else {
-        const newCategory: Category = {
-          id: crypto.randomUUID(),
-          name,
-          description,
-          image: form.image,
+        const data = (await res.json()) as {
+          success?: boolean;
+          error?: string;
         };
 
-        saveCategories([
-          ...categories,
-          newCategory,
-        ]);
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || "Erreur lors de la modification.");
+        }
+      } else {
+        const res = await fetch("/api/categories", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            description,
+            image: form.image,
+          }),
+        });
+
+        const data = (await res.json()) as {
+          success?: boolean;
+          error?: string;
+        };
+
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || "Erreur lors de l'ajout.");
+        }
       }
 
-      refresh();
+      await refresh();
       closeModal();
-    } catch {
+    } catch (err) {
       setError(
-        "Enregistrement impossible. Vérifiez l'espace de stockage du navigateur."
+        err instanceof Error
+          ? err.message
+          : "Enregistrement impossible dans la base de données."
       );
     } finally {
       setSaving(false);
@@ -403,10 +338,10 @@ export default function AdminCategoriesPage() {
   }
 
   /* ========================================
-     SUPPRIMER UNE CATÉGORIE
+     SUPPRIMER UNE CATÉGORIE (MONGODB)
   ======================================== */
 
-  function removeCategory(category: Category) {
+  async function removeCategory(category: Category) {
     setOpenMenu(null);
 
     const count = countProducts(category.name);
@@ -414,10 +349,9 @@ export default function AdminCategoriesPage() {
     if (count > 0) {
       window.alert(
         `Impossible de supprimer "${category.name}". ` +
-        `${count} produit(s) utilisent cette catégorie. ` +
-        "Réaffectez d'abord ces produits."
+          `${count} produit(s) utilisent cette catégorie. ` +
+          "Réaffectez d'abord ces produits."
       );
-
       return;
     }
 
@@ -428,33 +362,32 @@ export default function AdminCategoriesPage() {
     if (!confirmed) return;
 
     try {
-      saveCategories(
-        categories.filter(
-          (item) => item.id !== category.id
-        )
-      );
+      const res = await fetch(`/api/categories/${category.id}`, {
+        method: "DELETE",
+      });
 
-      refresh();
+      const data = (await res.json()) as {
+        success?: boolean;
+        error?: string;
+      };
+
+      if (!res.ok || !data.success) {
+        window.alert(data.error || "Impossible de supprimer cette catégorie.");
+        return;
+      }
+
+      await refresh();
     } catch {
-      window.alert(
-        "Impossible de supprimer cette catégorie."
-      );
+      window.alert("Erreur réseau lors de la suppression.");
     }
   }
 
   return (
     <div className="min-h-[calc(100vh-90px)] bg-[#F7F2E8] px-5 py-8 md:px-9">
-
       <div className="mx-auto max-w-[1300px]">
-
-        {/* =====================================
-            EN-TÊTE
-        ===================================== */}
-
+        {/* EN-TÊTE */}
         <div className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
-
           <div>
-
             <h1 className="mb-3 font-serif text-4xl font-semibold text-[#29271F] md:text-[44px]">
               Catégories
             </h1>
@@ -462,7 +395,6 @@ export default function AdminCategoriesPage() {
             <p className="text-sm text-[#817B70]">
               Gérez les catégories de vos produits.
             </p>
-
           </div>
 
           <button
@@ -473,39 +405,24 @@ export default function AdminCategoriesPage() {
             <Plus size={21} />
             Ajouter une catégorie
           </button>
-
         </div>
 
-        {/* =====================================
-            RECHERCHE
-        ===================================== */}
-
+        {/* RECHERCHE */}
         <div className="mb-6 flex h-[49px] max-w-[410px] items-center gap-3 rounded-xl border border-[#E2DDD4] bg-[#FFFCF8] px-4">
-
-          <Search
-            size={19}
-            className="shrink-0 text-[#827D73]"
-          />
+          <Search size={19} className="shrink-0 text-[#827D73]" />
 
           <input
             type="search"
             value={search}
-            onChange={(event) =>
-              setSearch(event.target.value)
-            }
+            onChange={(event) => setSearch(event.target.value)}
             placeholder="Rechercher une catégorie..."
             aria-label="Rechercher une catégorie"
             className="w-full min-w-0 bg-transparent text-sm outline-none"
           />
-
         </div>
 
-        {/* =====================================
-            LISTE DES CATÉGORIES
-        ===================================== */}
-
+        {/* LISTE DES CATÉGORIES */}
         <div className="space-y-4">
-
           {loaded &&
             filteredCategories.map((category) => {
               const count = countProducts(category.name);
@@ -515,23 +432,17 @@ export default function AdminCategoriesPage() {
                   key={category.id}
                   className="relative flex min-h-[132px] items-center gap-5 rounded-2xl border border-[#EFE8DC] bg-[#FFFCF8] p-3 shadow-sm transition duration-300 hover:shadow-md sm:gap-7"
                 >
-
                   {/* IMAGE */}
-
                   <div className="h-[104px] w-[115px] shrink-0 overflow-hidden rounded-xl bg-[#E9DFD1] sm:h-[125px] sm:w-[170px]">
-
                     <img
                       src={category.image}
                       alt={category.name}
                       className="h-full w-full object-cover transition duration-500 hover:scale-105"
                     />
-
                   </div>
 
                   {/* INFORMATIONS */}
-
                   <div className="min-w-0 flex-1 py-2">
-
                     <h2 className="mb-2 font-serif text-xl font-semibold text-[#29271F] sm:text-[23px]">
                       {category.name}
                     </h2>
@@ -543,24 +454,17 @@ export default function AdminCategoriesPage() {
                     <p className="text-xs leading-5 text-[#8C867C] sm:text-sm">
                       {category.description}
                     </p>
-
                   </div>
 
                   {/* MENU ACTIONS */}
-
                   <div className="relative self-start pt-2">
-
                     <button
                       type="button"
                       aria-label={`Actions pour ${category.name}`}
-                      aria-expanded={
-                        openMenu === category.id
-                      }
+                      aria-expanded={openMenu === category.id}
                       onClick={() =>
                         setOpenMenu(
-                          openMenu === category.id
-                            ? null
-                            : category.id
+                          openMenu === category.id ? null : category.id
                         )
                       }
                       className="flex h-10 w-10 items-center justify-center rounded-lg text-[#49463D] transition hover:bg-[#F0EAE0]"
@@ -569,9 +473,7 @@ export default function AdminCategoriesPage() {
                     </button>
 
                     {openMenu === category.id && (
-
                       <div className="absolute right-0 top-12 z-30 w-[185px] overflow-hidden rounded-xl border border-[#E8E0D4] bg-white p-1.5 shadow-xl">
-
                         <button
                           type="button"
                           onClick={() => openEdit(category)}
@@ -589,35 +491,24 @@ export default function AdminCategoriesPage() {
                           <Trash2 size={17} />
                           Supprimer
                         </button>
-
                       </div>
-
                     )}
-
                   </div>
-
                 </article>
               );
             })}
 
           {/* LISTE VIDE */}
-
           {loaded && filteredCategories.length === 0 && (
-
             <div className="flex min-h-[250px] flex-col items-center justify-center rounded-2xl border border-[#E9E2D8] bg-[#FFFCF8] p-8 text-center">
-
-              <Package
-                size={42}
-                className="mb-4 text-[#8E9A7F]"
-              />
+              <Package size={42} className="mb-4 text-[#8E9A7F]" />
 
               <h2 className="mb-2 font-serif text-2xl">
                 Aucune catégorie trouvée
               </h2>
 
               <p className="mb-5 text-sm text-[#817B70]">
-                Ajoutez une nouvelle catégorie ou
-                modifiez votre recherche.
+                Ajoutez une nouvelle catégorie ou modifiez votre recherche.
               </p>
 
               <button
@@ -627,9 +518,7 @@ export default function AdminCategoriesPage() {
               >
                 Ajouter une catégorie
               </button>
-
             </div>
-
           )}
 
           {!loaded && (
@@ -637,24 +526,17 @@ export default function AdminCategoriesPage() {
               Chargement des catégories...
             </p>
           )}
-
         </div>
 
         {/* COMPTEUR */}
-
         <p className="mt-7 text-right text-xs text-[#817B70]">
           {filteredCategories.length} catégorie
           {filteredCategories.length !== 1 ? "s" : ""}
         </p>
-
       </div>
 
-      {/* =====================================
-          MODALE AJOUT / MODIFICATION
-      ===================================== */}
-
+      {/* MODALE AJOUT / MODIFICATION */}
       {modal && (
-
         <div
           className="fixed inset-0 z-[200] flex items-center justify-center overflow-y-auto bg-black/60 p-4 backdrop-blur-sm"
           onMouseDown={(event) => {
@@ -663,20 +545,15 @@ export default function AdminCategoriesPage() {
             }
           }}
         >
-
           <div
             role="dialog"
             aria-modal="true"
             aria-labelledby="category-modal-title"
             className="my-auto w-full max-w-[560px] overflow-hidden rounded-2xl bg-[#FFFCF8] shadow-2xl"
           >
-
             {/* HEADER MODALE */}
-
             <div className="flex items-center justify-between border-b border-[#E9E2D8] p-6">
-
               <div>
-
                 <p className="mb-2 text-[11px] font-semibold tracking-[0.25em] text-[#71805E]">
                   RADIOWOOD ADMIN
                 </p>
@@ -689,7 +566,6 @@ export default function AdminCategoriesPage() {
                     ? "Ajouter une catégorie"
                     : "Modifier la catégorie"}
                 </h2>
-
               </div>
 
               <button
@@ -700,20 +576,15 @@ export default function AdminCategoriesPage() {
               >
                 <X size={20} />
               </button>
-
             </div>
 
             {/* FORMULAIRE */}
-
             <form
               onSubmit={handleSave}
               className="max-h-[75vh] space-y-5 overflow-y-auto p-6"
             >
-
               {/* IMAGE */}
-
               <div>
-
                 <label className="mb-3 block text-sm font-semibold">
                   Image de la catégorie *
                 </label>
@@ -727,7 +598,6 @@ export default function AdminCategoriesPage() {
                 />
 
                 <div className="relative h-[190px] overflow-hidden rounded-xl border border-[#E4DDD2] bg-[#F1EADF]">
-
                   {form.image ? (
                     <img
                       src={form.image}
@@ -737,37 +607,27 @@ export default function AdminCategoriesPage() {
                   ) : (
                     <div className="flex h-full flex-col items-center justify-center gap-3 text-[#817B70]">
                       <ImagePlus size={37} />
-                      <span className="text-xs">
-                        Aucune image
-                      </span>
+                      <span className="text-xs">Aucune image</span>
                     </div>
                   )}
 
                   <button
                     type="button"
-                    onClick={() =>
-                      fileInput.current?.click()
-                    }
+                    onClick={() => fileInput.current?.click()}
                     className="absolute bottom-3 right-3 flex items-center gap-2 rounded-lg bg-[#405033] px-4 py-2.5 text-xs font-semibold text-white shadow-lg"
                   >
                     <ImagePlus size={16} />
-                    {uploading
-                      ? "Chargement..."
-                      : "Changer l'image"}
+                    {uploading ? "Chargement..." : "Changer l'image"}
                   </button>
-
                 </div>
 
                 <p className="mt-2 text-xs text-[#817B70]">
                   JPG, PNG ou WebP — 5 Mo maximum.
                 </p>
-
               </div>
 
               {/* NOM */}
-
               <div>
-
                 <label
                   htmlFor="rw-category-name"
                   className="mb-2 block text-sm font-semibold"
@@ -781,19 +641,14 @@ export default function AdminCategoriesPage() {
                   required
                   minLength={2}
                   value={form.name}
-                  onChange={(event) =>
-                    updateField("name", event.target.value)
-                  }
+                  onChange={(event) => updateField("name", event.target.value)}
                   placeholder="Ex : Plateaux"
                   className={inputClass}
                 />
-
               </div>
 
               {/* DESCRIPTION */}
-
               <div>
-
                 <label
                   htmlFor="rw-category-description"
                   className="mb-2 block text-sm font-semibold"
@@ -806,36 +661,26 @@ export default function AdminCategoriesPage() {
                   rows={3}
                   value={form.description}
                   onChange={(event) =>
-                    updateField(
-                      "description",
-                      event.target.value
-                    )
+                    updateField("description", event.target.value)
                   }
                   placeholder="Décrivez cette catégorie..."
                   className={`${inputClass} resize-y`}
                 />
-
               </div>
 
               {/* ERREUR */}
-
               {error && (
                 <div
                   role="alert"
                   className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700"
                 >
-                  <AlertCircle
-                    size={17}
-                    className="shrink-0"
-                  />
+                  <AlertCircle size={17} className="shrink-0" />
                   {error}
                 </div>
               )}
 
               {/* BOUTONS */}
-
               <div className="flex justify-end gap-3 border-t border-[#E9E2D8] pt-5">
-
                 <button
                   type="button"
                   onClick={closeModal}
@@ -857,17 +702,11 @@ export default function AdminCategoriesPage() {
                     ? "Ajouter"
                     : "Enregistrer"}
                 </button>
-
               </div>
-
             </form>
-
           </div>
-
         </div>
-
       )}
-
     </div>
   );
 }

@@ -1,4 +1,3 @@
-
 "use client";
 
 import {
@@ -24,20 +23,15 @@ import {
   Package,
 } from "lucide-react";
 
-import {
-  type Product,
-  type ProductStatus,
-  CATEGORIES,
-  getProducts,
-  saveProducts,
-  updateProduct,
-  deleteProducts,
-} from "@/lib/products";
+import type { ProductStatus } from "@/lib/products";
+import type { ProductDB } from "@/lib/products-db";
+import type { Category } from "@/lib/categories";
 
 const PAGE_SIZE = 6;
 
 export default function ProduitsPage() {
-  const [products, setProducts] = useState<Product[]>([]);
+  const [products, setProducts] = useState<ProductDB[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [loaded, setLoaded] = useState(false);
 
   const [search, setSearch] = useState("");
@@ -46,11 +40,9 @@ export default function ProduitsPage() {
   const [page, setPage] = useState(1);
 
   const [selected, setSelected] = useState<string[]>([]);
-  const [modal, setModal] = useState<"view" | "edit" | null>(
-    null
-  );
-  const [activeProduct, setActiveProduct] =
-    useState<Product | null>(null);
+  const [modal, setModal] = useState<"view" | "edit" | null>(null);
+  const [activeProduct, setActiveProduct] = useState<ProductDB | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const [editForm, setEditForm] = useState({
     name: "",
@@ -62,29 +54,47 @@ export default function ProduitsPage() {
     status: "Publié" as ProductStatus,
   });
 
-  const refresh = useCallback(() => {
-    setProducts(getProducts());
+  /* ========================================
+     CHARGEMENT DEPUIS MONGODB
+  ======================================== */
+
+  const refresh = useCallback(async () => {
+    try {
+      const [prodRes, catRes] = await Promise.all([
+        fetch("/api/admin/products", { cache: "no-store" }),
+        fetch("/api/categories", { cache: "no-store" }),
+      ]);
+
+      const prodData = (await prodRes.json()) as {
+        success?: boolean;
+        products?: ProductDB[];
+      };
+      const catData = (await catRes.json()) as {
+        success?: boolean;
+        categories?: Category[];
+      };
+
+      if (prodData.success && Array.isArray(prodData.products)) {
+        setProducts(prodData.products);
+      }
+
+      if (catData.success && Array.isArray(catData.categories)) {
+        setCategories(catData.categories);
+      }
+    } catch (err) {
+      console.error("Erreur chargement produits:", err);
+    } finally {
+      setLoaded(true);
+    }
   }, []);
 
   useEffect(() => {
-    refresh();
-    setLoaded(true);
-
-    window.addEventListener(
-      "radiwood-products-updated",
-      refresh
-    );
-
-    window.addEventListener("storage", refresh);
-
-    return () => {
-      window.removeEventListener(
-        "radiwood-products-updated",
-        refresh
-      );
-      window.removeEventListener("storage", refresh);
-    };
+    void refresh();
   }, [refresh]);
+
+  /* ========================================
+     FILTRAGE & PAGINATION
+  ======================================== */
 
   const filtered = useMemo(() => {
     return products.filter((product) => {
@@ -93,25 +103,16 @@ export default function ProduitsPage() {
         .includes(search.toLocaleLowerCase("fr").trim());
 
       const matchesCategory =
-        category === "Toutes" ||
-        product.category === category;
+        category === "Toutes" || product.category === category;
 
       const matchesStatus =
         status === "Tous" || product.status === status;
 
-      return (
-        matchesName &&
-        matchesCategory &&
-        matchesStatus
-      );
+      return matchesName && matchesCategory && matchesStatus;
     });
   }, [products, search, category, status]);
 
-  const totalPages = Math.max(
-    1,
-    Math.ceil(filtered.length / PAGE_SIZE)
-  );
-
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
 
   const visible = filtered.slice(
@@ -147,22 +148,18 @@ export default function ProduitsPage() {
     const ids = visible.map((item) => item.id);
 
     if (allSelected) {
-      setSelected((previous) =>
-        previous.filter((id) => !ids.includes(id))
-      );
+      setSelected((previous) => previous.filter((id) => !ids.includes(id)));
     } else {
-      setSelected((previous) =>
-        Array.from(new Set([...previous, ...ids]))
-      );
+      setSelected((previous) => Array.from(new Set([...previous, ...ids])));
     }
   }
 
-  function openView(product: Product) {
+  function openView(product: ProductDB) {
     setActiveProduct(product);
     setModal("view");
   }
 
-  function openEdit(product: Product) {
+  function openEdit(product: ProductDB) {
     setActiveProduct(product);
 
     setEditForm({
@@ -178,7 +175,11 @@ export default function ProduitsPage() {
     setModal("edit");
   }
 
-  function saveEdit(event: FormEvent<HTMLFormElement>) {
+  /* ========================================
+     MODIFICATION PRODUIT (MONGODB)
+  ======================================== */
+
+  async function saveEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!activeProduct) return;
@@ -194,64 +195,116 @@ export default function ProduitsPage() {
       return;
     }
 
-    updateProduct(activeProduct.id, {
-      name: editForm.name.trim(),
-      category: editForm.category,
-      price,
-      description: editForm.description.trim(),
-      dimensions: editForm.dimensions.trim(),
-      materials: editForm.materials.trim(),
-      status: editForm.status,
-    });
+    setSaving(true);
 
-    refresh();
-    setModal(null);
-    setActiveProduct(null);
+    try {
+      const res = await fetch(`/api/admin/products/${activeProduct.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: editForm.name.trim(),
+          category: editForm.category,
+          price,
+          description: editForm.description.trim(),
+          dimensions: editForm.dimensions.trim(),
+          materials: editForm.materials.trim(),
+          status: editForm.status,
+        }),
+      });
+
+      const data = (await res.json()) as {
+        success?: boolean;
+        error?: string;
+      };
+
+      if (!res.ok || !data.success) {
+        window.alert(data.error || "Impossible de modifier le produit.");
+        return;
+      }
+
+      await refresh();
+      setModal(null);
+      setActiveProduct(null);
+    } catch {
+      window.alert("Erreur réseau lors de la modification.");
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function removeOne(product: Product) {
-    if (
-      !window.confirm(
-        `Voulez-vous supprimer "${product.name}" ?`
-      )
-    ) {
+  /* ========================================
+     SUPPRESSION INDIVIDUELLE (MONGODB)
+  ======================================== */
+
+  async function removeOne(product: ProductDB) {
+    if (!window.confirm(`Voulez-vous supprimer "${product.name}" ?`)) {
       return;
     }
 
-    deleteProducts([product.id]);
-    refresh();
-    setSelected((previous) =>
-      previous.filter((id) => id !== product.id)
-    );
+    try {
+      const res = await fetch(`/api/admin/products/${product.id}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) {
+        window.alert("Impossible de supprimer ce produit.");
+        return;
+      }
+
+      setProducts((prev) => prev.filter((p) => p.id !== product.id));
+      setSelected((previous) => previous.filter((id) => id !== product.id));
+    } catch {
+      window.alert("Erreur réseau lors de la suppression.");
+    }
   }
 
-  function removeSelected() {
+  /* ========================================
+     ACTIONS GROUPÉES (MONGODB)
+  ======================================== */
+
+  async function removeSelected() {
     if (
       !selected.length ||
-      !window.confirm(
-        `Supprimer ${selected.length} produit(s) ?`
-      )
+      !window.confirm(`Supprimer ${selected.length} produit(s) ?`)
     ) {
       return;
     }
 
-    deleteProducts(selected);
-    setSelected([]);
-    refresh();
+    try {
+      await Promise.all(
+        selected.map((id) =>
+          fetch(`/api/admin/products/${id}`, {
+            method: "DELETE",
+          })
+        )
+      );
+
+      setSelected([]);
+      await refresh();
+    } catch {
+      window.alert("Erreur lors de la suppression groupée.");
+    }
   }
 
-  function changeSelectedStatus(next: ProductStatus) {
-    const ids = new Set(selected);
+  async function changeSelectedStatus(next: ProductStatus) {
+    if (!selected.length) return;
 
-    const updated = getProducts().map((product) =>
-      ids.has(product.id)
-        ? { ...product, status: next }
-        : product
-    );
+    try {
+      await Promise.all(
+        selected.map((id) =>
+          fetch(`/api/admin/products/${id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: next }),
+          })
+        )
+      );
 
-    saveProducts(updated);
-    refresh();
-    setSelected([]);
+      setSelected([]);
+      await refresh();
+    } catch {
+      window.alert("Impossible de mettre à jour le statut.");
+    }
   }
 
   const inputClass =
@@ -260,12 +313,12 @@ export default function ProduitsPage() {
   const actionClass =
     "flex h-10 w-10 items-center justify-center rounded-lg border border-[#E7E2D9] bg-white transition hover:bg-[#F2EFE8]";
 
+  const categoryOptions = categories.map((c) => c.name);
+
   return (
     <div className="min-h-[calc(100vh-90px)] bg-[#F7F2E8] px-5 py-8 md:px-9">
       <div className="mx-auto max-w-[1500px]">
-
         {/* EN-TÊTE */}
-
         <div className="mb-8 flex flex-col justify-between gap-5 md:flex-row md:items-center">
           <div>
             <p className="mb-3 text-sm font-semibold text-[#5A5A50]">
@@ -291,7 +344,6 @@ export default function ProduitsPage() {
         </div>
 
         {/* FILTRES */}
-
         <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-[1.5fr_1fr_.8fr]">
           <div className="flex h-[54px] items-center gap-3 rounded-xl border border-[#DCD8D0] bg-[#FFFCF8] px-4">
             <Search size={22} className="text-[#858178]" />
@@ -299,9 +351,7 @@ export default function ProduitsPage() {
             <input
               type="search"
               value={search}
-              onChange={(e) =>
-                changeFilter("search", e.target.value)
-              }
+              onChange={(e) => changeFilter("search", e.target.value)}
               placeholder="Rechercher un produit..."
               className="w-full min-w-0 bg-transparent text-sm outline-none"
             />
@@ -311,16 +361,12 @@ export default function ProduitsPage() {
             <select
               aria-label="Filtrer par catégorie"
               value={category}
-              onChange={(e) =>
-                changeFilter("category", e.target.value)
-              }
+              onChange={(e) => changeFilter("category", e.target.value)}
               className={`${inputClass} h-[54px] appearance-none pr-10`}
             >
-              <option value="Toutes">
-                Toutes les catégories
-              </option>
+              <option value="Toutes">Toutes les catégories</option>
 
-              {CATEGORIES.map((item) => (
+              {categoryOptions.map((item) => (
                 <option key={item} value={item}>
                   {item}
                 </option>
@@ -337,9 +383,7 @@ export default function ProduitsPage() {
             <select
               aria-label="Filtrer par statut"
               value={status}
-              onChange={(e) =>
-                changeFilter("status", e.target.value)
-              }
+              onChange={(e) => changeFilter("status", e.target.value)}
               className={`${inputClass} h-[54px] appearance-none pr-10`}
             >
               <option value="Tous">Tous les statuts</option>
@@ -355,7 +399,6 @@ export default function ProduitsPage() {
         </div>
 
         {/* ACTIONS GROUPÉES */}
-
         {selected.length > 0 && (
           <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-[#CEDABF] bg-[#E8F0E2] p-4">
             <p className="mr-auto text-sm font-semibold text-[#405033]">
@@ -364,9 +407,7 @@ export default function ProduitsPage() {
 
             <button
               type="button"
-              onClick={() =>
-                changeSelectedStatus("Publié")
-              }
+              onClick={() => changeSelectedStatus("Publié")}
               className="rounded-lg bg-[#405033] px-4 py-2 text-xs text-white"
             >
               Publier
@@ -374,9 +415,7 @@ export default function ProduitsPage() {
 
             <button
               type="button"
-              onClick={() =>
-                changeSelectedStatus("Brouillon")
-              }
+              onClick={() => changeSelectedStatus("Brouillon")}
               className="rounded-lg bg-white px-4 py-2 text-xs"
             >
               Brouillon
@@ -394,7 +433,6 @@ export default function ProduitsPage() {
         )}
 
         {/* TABLEAU */}
-
         <div className="overflow-hidden rounded-xl border border-[#E6DFD5] bg-[#FFFCF8] shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full min-w-[880px] border-collapse text-left">
@@ -431,9 +469,7 @@ export default function ProduitsPage() {
                           type="checkbox"
                           aria-label={`Sélectionner ${product.name}`}
                           checked={selected.includes(product.id)}
-                          onChange={() =>
-                            toggleSelection(product.id)
-                          }
+                          onChange={() => toggleSelection(product.id)}
                           className="h-4 w-4 accent-[#405033]"
                         />
                       </td>
@@ -511,17 +547,12 @@ export default function ProduitsPage() {
 
                 {loaded && visible.length === 0 && (
                   <tr>
-                    <td
-                      colSpan={7}
-                      className="py-20 text-center"
-                    >
+                    <td colSpan={7} className="py-20 text-center">
                       <Package
                         size={40}
                         className="mx-auto mb-3 text-[#8C987F]"
                       />
-                      <p className="font-serif text-xl">
-                        Aucun produit trouvé
-                      </p>
+                      <p className="font-serif text-xl">Aucun produit trouvé</p>
                     </td>
                   </tr>
                 )}
@@ -542,14 +573,11 @@ export default function ProduitsPage() {
         </div>
 
         {/* PAGINATION */}
-
         <div className="mt-8 flex flex-col items-center justify-between gap-5 sm:flex-row">
           <p className="text-sm text-[#817B70]">
             {filtered.length === 0
               ? "Aucun produit à afficher"
-              : `Affichage de ${
-                  (currentPage - 1) * PAGE_SIZE + 1
-                } à ${Math.min(
+              : `Affichage de ${(currentPage - 1) * PAGE_SIZE + 1} à ${Math.min(
                   currentPage * PAGE_SIZE,
                   filtered.length
                 )} sur ${filtered.length} produits`}
@@ -566,23 +594,22 @@ export default function ProduitsPage() {
               <ChevronLeft size={17} />
             </button>
 
-            {Array.from(
-              { length: totalPages },
-              (_, i) => i + 1
-            ).map((number) => (
-              <button
-                key={number}
-                type="button"
-                onClick={() => setPage(number)}
-                className={`h-10 w-10 rounded-lg text-sm font-semibold ${
-                  currentPage === number
-                    ? "bg-[#405033] text-white"
-                    : "bg-white text-[#625D53]"
-                }`}
-              >
-                {number}
-              </button>
-            ))}
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map(
+              (number) => (
+                <button
+                  key={number}
+                  type="button"
+                  onClick={() => setPage(number)}
+                  className={`h-10 w-10 rounded-lg text-sm font-semibold ${
+                    currentPage === number
+                      ? "bg-[#405033] text-white"
+                      : "bg-white text-[#625D53]"
+                  }`}
+                >
+                  {number}
+                </button>
+              )
+            )}
 
             <button
               type="button"
@@ -598,7 +625,6 @@ export default function ProduitsPage() {
       </div>
 
       {/* MODALE CONSULTER / MODIFIER */}
-
       {modal && activeProduct && (
         <div
           className="fixed inset-0 z-[200] flex items-center justify-center overflow-y-auto bg-black/60 p-4"
@@ -615,10 +641,7 @@ export default function ProduitsPage() {
             className="my-auto w-full max-w-[680px] overflow-hidden rounded-2xl bg-[#FFFCF8] shadow-2xl"
           >
             <div className="flex items-center justify-between border-b border-[#E8E0D6] p-6">
-              <h2
-                id="product-modal-title"
-                className="font-serif text-2xl"
-              >
+              <h2 id="product-modal-title" className="font-serif text-2xl">
                 {modal === "view"
                   ? "Détails du produit"
                   : "Modifier le produit"}
@@ -642,18 +665,13 @@ export default function ProduitsPage() {
                   className="h-[260px] w-full rounded-xl object-cover"
                 />
 
-                <h3 className="font-serif text-2xl">
-                  {activeProduct.name}
-                </h3>
+                <h3 className="font-serif text-2xl">{activeProduct.name}</h3>
 
                 <p className="text-sm text-[#817A70]">
-                  {activeProduct.category} —{" "}
-                  {activeProduct.status}
+                  {activeProduct.category} — {activeProduct.status}
                 </p>
 
-                <p className="text-xl font-bold">
-                  {activeProduct.price} TND
-                </p>
+                <p className="text-xl font-bold">{activeProduct.price} TND</p>
 
                 <p className="whitespace-pre-wrap text-sm leading-7">
                   {activeProduct.description}
@@ -670,16 +688,14 @@ export default function ProduitsPage() {
                 </p>
 
                 <div className="flex flex-wrap gap-3">
-                  {(activeProduct.images ?? []).map(
-                    (image, index) => (
-                      <img
-                        key={index}
-                        src={image}
-                        alt={`Photo ${index + 1}`}
-                        className="h-20 w-20 rounded-lg object-cover"
-                      />
-                    )
-                  )}
+                  {(activeProduct.images ?? []).map((image, index) => (
+                    <img
+                      key={index}
+                      src={image}
+                      alt={`Photo ${index + 1}`}
+                      className="h-20 w-20 rounded-lg object-cover"
+                    />
+                  ))}
                 </div>
               </div>
             ) : (
@@ -719,8 +735,10 @@ export default function ProduitsPage() {
                       }
                       className={inputClass}
                     >
-                      {CATEGORIES.map((item) => (
-                        <option key={item}>{item}</option>
+                      {categoryOptions.map((item) => (
+                        <option key={item} value={item}>
+                          {item}
+                        </option>
                       ))}
                     </select>
                   </div>
@@ -818,10 +836,13 @@ export default function ProduitsPage() {
 
                 <button
                   type="submit"
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#405033] px-5 py-3 text-sm font-semibold text-white"
+                  disabled={saving}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#405033] px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
                 >
                   <Check size={18} />
-                  Enregistrer les modifications
+                  {saving
+                    ? "Enregistrement..."
+                    : "Enregistrer les modifications"}
                 </button>
               </form>
             )}

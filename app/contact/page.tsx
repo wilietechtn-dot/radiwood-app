@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useState, type FormEvent } from "react";
@@ -9,7 +8,6 @@ import {
   Headphones,
   Mail,
   MapPin,
-  MessageCircle,
   Phone,
   Send,
   Truck,
@@ -85,7 +83,9 @@ function whatsappUrl(message: string) {
 }
 
 export default function ContactPage() {
+  const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
   const [form, setForm] = useState({
     name: "",
     phone: "",
@@ -94,45 +94,57 @@ export default function ContactPage() {
     message: "",
   });
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-
     setSubmitted(false);
+    setErrorMsg("");
+    setLoading(true);
 
-    const text = [
-      `Nom : ${form.name}`,
-      `Téléphone : ${form.phone}`,
-      `Email : ${form.email}`,
-      `Sujet : ${form.subject}`,
-      "",
-      form.message,
-    ].join("\n");
+    try {
+      const res = await fetch("/api/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: form.name,
+          phone: form.phone,
+          email: form.email,
+          subject: form.subject || "Demande de contact",
+          message: form.message,
+          source: "Contact",
+        }),
+      });
 
-    // Sans backend, on ouvre la messagerie du visiteur.
-    // L'envoi n'est pas confirmé automatiquement.
-    if (CONTACT.email) {
-      const mailto =
-        `mailto:${CONTACT.email}` +
-        `?subject=${encodeURIComponent(
-          "RadiWood - " + form.subject
-        )}` +
-        `&body=${encodeURIComponent(text)}`;
+      const data = (await res.json()) as {
+        success?: boolean;
+        error?: string;
+      };
 
-      window.location.href = mailto;
-    } else {
-      window.open(
-        whatsappUrl(text),
-        "_blank",
-        "noopener,noreferrer"
+      if (!res.ok || !data.success) {
+        setErrorMsg(
+          data.error || "Impossible d'envoyer votre message."
+        );
+        return;
+      }
+
+      setSubmitted(true);
+      setForm({
+        name: "",
+        phone: "",
+        email: "",
+        subject: "",
+        message: "",
+      });
+    } catch {
+      setErrorMsg(
+        "Erreur réseau. Veuillez réessayer ou nous écrire sur WhatsApp."
       );
+    } finally {
+      setLoading(false);
     }
-
-    setSubmitted(true);
   }
 
   return (
     <div className="bg-[#F7F2E8] text-[#29271F]">
-
       {/* ======================================
           HERO CONTACT
       ====================================== */}
@@ -152,9 +164,7 @@ export default function ContactPage() {
         }}
       >
         <div className="mx-auto w-full max-w-7xl px-6 py-16 lg:px-12">
-
           <div className="max-w-[530px] text-white">
-
             <p className="mb-4 text-xs font-semibold tracking-[0.45em] text-[#DCC4A0]">
               CONTACT
             </p>
@@ -168,11 +178,10 @@ export default function ContactPage() {
             <p className="font-serif text-xl leading-snug md:text-[25px]">
               Une question, une commande sur mesure
               <br className="hidden sm:block" />
-              ou simplement l'envie d'échanger ?
+              ou simplement l&apos;envie d&apos;échanger ?
               <br />
               Notre équipe est à votre écoute.
             </p>
-
           </div>
         </div>
       </section>
@@ -182,39 +191,26 @@ export default function ContactPage() {
       ====================================== */}
 
       <section className="py-12 md:py-16">
-
         <div className="mx-auto grid max-w-7xl grid-cols-1 items-stretch gap-5 px-6 lg:grid-cols-[1.2fr_.9fr] lg:px-12">
-
           {/* FORMULAIRE */}
 
           <div className="rounded-2xl border border-[#ebe3d6] bg-[#FFFCF7] p-6 shadow-sm sm:p-8">
-
             <h2 className="mb-3 font-serif text-3xl md:text-[36px]">
               Envoyez-nous un message
             </h2>
 
             <p className="mb-7 max-w-xl text-sm leading-6 text-[#77736B]">
-              Remplissez le formulaire ci-dessous.
-              Que ce soit pour une question,
-              une commande personnalisée ou un projet
-              spécifique, nous serons ravis de vous
-              accompagner.
+              Remplissez le formulaire ci-dessous. Que ce soit pour une
+              question, une commande personnalisée ou un projet spécifique,
+              nous serons ravis de vous accompagner.
             </p>
 
-            <form
-              onSubmit={handleSubmit}
-              className="space-y-4"
-            >
-
+            <form onSubmit={handleSubmit} className="space-y-4">
               {/* NOM + TÉLÉPHONE */}
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-
                 <div>
-                  <label
-                    htmlFor="contact-name"
-                    className="sr-only"
-                  >
+                  <label htmlFor="contact-name" className="sr-only">
                     Nom complet
                   </label>
 
@@ -235,10 +231,7 @@ export default function ContactPage() {
                 </div>
 
                 <div>
-                  <label
-                    htmlFor="contact-phone"
-                    className="sr-only"
-                  >
+                  <label htmlFor="contact-phone" className="sr-only">
                     Téléphone
                   </label>
 
@@ -257,16 +250,12 @@ export default function ContactPage() {
                     className="h-12 w-full rounded-lg border border-[#DED6CA] bg-[#FFFCF7] px-4 text-sm outline-none transition focus:border-[#405033] focus:ring-2 focus:ring-[#405033]/10"
                   />
                 </div>
-
               </div>
 
               {/* EMAIL */}
 
               <div>
-                <label
-                  htmlFor="contact-email"
-                  className="sr-only"
-                >
+                <label htmlFor="contact-email" className="sr-only">
                   Adresse e-mail
                 </label>
 
@@ -297,7 +286,6 @@ export default function ContactPage() {
                 </label>
 
                 <div className="relative">
-
                   <select
                     id="contact-subject"
                     required
@@ -310,15 +298,10 @@ export default function ContactPage() {
                     }
                     className="h-12 w-full appearance-none rounded-lg border border-[#DED6CA] bg-[#FFFCF7] px-4 pr-12 text-sm outline-none transition focus:border-[#405033]"
                   >
-                    <option value="">
-                      Sélectionnez un sujet
-                    </option>
+                    <option value="">Sélectionnez un sujet</option>
 
                     {subjects.map((subject) => (
-                      <option
-                        key={subject}
-                        value={subject}
-                      >
+                      <option key={subject} value={subject}>
                         {subject}
                       </option>
                     ))}
@@ -328,17 +311,13 @@ export default function ContactPage() {
                     size={18}
                     className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[#666157]"
                   />
-
                 </div>
               </div>
 
               {/* MESSAGE */}
 
               <div>
-                <label
-                  htmlFor="contact-message"
-                  className="sr-only"
-                >
+                <label htmlFor="contact-message" className="sr-only">
                   Votre message
                 </label>
 
@@ -362,42 +341,43 @@ export default function ContactPage() {
 
               <button
                 type="submit"
-                className="flex w-full items-center justify-center gap-3 rounded-full bg-[#405033] px-6 py-4 text-sm font-semibold text-white transition duration-300 hover:bg-[#526442]"
+                disabled={loading}
+                className="flex w-full items-center justify-center gap-3 rounded-full bg-[#405033] px-6 py-4 text-sm font-semibold text-white transition duration-300 hover:bg-[#526442] disabled:opacity-60"
               >
                 <Send size={19} />
-                Préparer le message
+                {loading ? "Envoi en cours..." : "Envoyer le message"}
               </button>
+
+              {errorMsg && (
+                <div
+                  role="alert"
+                  className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs leading-5 text-red-700"
+                >
+                  {errorMsg}
+                </div>
+              )}
 
               {submitted && (
                 <div
                   role="status"
                   className="flex items-start gap-2 rounded-lg bg-[#e9efe3] p-3 text-xs leading-5 text-[#405033]"
                 >
-                  <CheckCircle2
-                    size={17}
-                    className="shrink-0"
-                  />
-                  Votre application de messagerie a été
-                  sollicitée. Vérifiez la fenêtre ouverte
-                  et confirmez l'envoi.
+                  <CheckCircle2 size={17} className="shrink-0" />
+                  Votre message a bien été enregistré. Notre équipe vous
+                  répondra dans les plus brefs délais.
                 </div>
               )}
-
-              <p className="text-center text-xs text-[#8b857b]">
-                Ce formulaire ouvre votre application
-                de messagerie pour finaliser l'envoi.
-              </p>
-
             </form>
-
           </div>
 
           {/* ======================================
               COORDONNÉES
           ====================================== */}
 
-          <div className="relative overflow-hidden rounded-2xl bg-[#405033] p-7 text-[#F7F2E8] shadow-sm sm:p-9">
-
+          <div
+            id="coordonnees"
+            className="relative overflow-hidden rounded-2xl bg-[#405033] p-7 text-[#F7F2E8] shadow-sm sm:p-9"
+          >
             {/* BRANCHE DÉCORATIVE */}
 
             <div className="pointer-events-none absolute -right-10 top-10 rotate-[-25deg] text-[190px] leading-none text-[#C9D0B3]/10">
@@ -405,18 +385,16 @@ export default function ContactPage() {
             </div>
 
             <div className="relative z-10">
-
               <h2 className="mb-3 font-serif text-3xl md:text-[36px]">
                 Nos coordonnées
               </h2>
 
               <p className="mb-9 max-w-sm text-sm leading-6 text-[#ece8d9]">
-                Retrouvez-nous ou contactez-nous
-                directement via les différents canaux.
+                Retrouvez-nous ou contactez-nous directement via les différents
+                canaux.
               </p>
 
               <div className="space-y-7">
-
                 {/* LOCATION */}
 
                 <div className="flex items-start gap-4">
@@ -430,8 +408,7 @@ export default function ContactPage() {
                     </h3>
 
                     <p className="text-xs leading-5 text-[#dddcca]">
-                      {CONTACT.address ||
-                        "Adresse de l'atelier à préciser"}
+                      {CONTACT.address || "Adresse de l'atelier à préciser"}
                     </p>
                   </div>
                 </div>
@@ -444,9 +421,7 @@ export default function ContactPage() {
                   </div>
 
                   <div>
-                    <h3 className="mb-1 text-sm font-semibold">
-                      Téléphone
-                    </h3>
+                    <h3 className="mb-1 text-sm font-semibold">Téléphone</h3>
 
                     {CONTACT.phone ? (
                       <a
@@ -507,7 +482,6 @@ export default function ContactPage() {
                     </p>
                   </div>
                 </div>
-
               </div>
 
               {/* WHATSAPP BUTTON */}
@@ -529,16 +503,25 @@ export default function ContactPage() {
 
               {/* SOCIAL MEDIA */}
 
-              <h3 className="mb-4 text-sm font-semibold">
-                Suivez-nous
-              </h3>
+              <h3 className="mb-4 text-sm font-semibold">Suivez-nous</h3>
 
               <div className="mb-5 flex items-center gap-3">
-
                 {[
-                  { icon: FaInstagram, url: CONTACT.instagram, label: "Instagram" },
-                  { icon: FaFacebookF, url: CONTACT.facebook, label: "Facebook" },
-                  { icon: FaPinterestP, url: CONTACT.pinterest, label: "Pinterest" },
+                  {
+                    icon: FaInstagram,
+                    url: CONTACT.instagram,
+                    label: "Instagram",
+                  },
+                  {
+                    icon: FaFacebookF,
+                    url: CONTACT.facebook,
+                    label: "Facebook",
+                  },
+                  {
+                    icon: FaPinterestP,
+                    url: CONTACT.pinterest,
+                    label: "Pinterest",
+                  },
                   { icon: FaYoutube, url: CONTACT.youtube, label: "YouTube" },
                 ].map(({ icon: Icon, url, label }) =>
                   url ? (
@@ -562,17 +545,14 @@ export default function ContactPage() {
                     </span>
                   )
                 )}
-
               </div>
 
               <p className="text-xs leading-6 text-[#dddcca]">
-                Découvrez nos dernières créations,
-                les coulisses de l'atelier et nos inspirations.
+                Découvrez nos dernières créations, les coulisses de
+                l&apos;atelier et nos inspirations.
               </p>
-
             </div>
           </div>
-
         </div>
       </section>
 
@@ -581,11 +561,8 @@ export default function ContactPage() {
       ====================================== */}
 
       <section className="pb-16 pt-6">
-
         <div className="mx-auto max-w-7xl px-6 lg:px-12">
-
           <div className="mb-10 text-center">
-
             <p className="mb-3 text-xs font-semibold tracking-[0.45em] text-[#526442]">
               INFORMATIONS UTILES
             </p>
@@ -595,21 +572,16 @@ export default function ContactPage() {
             </h2>
 
             <p className="text-sm text-[#77736B]">
-              Tout ce qu'il faut savoir avant de nous contacter.
+              Tout ce qu&apos;il faut savoir avant de nous contacter.
             </p>
-
           </div>
 
           <div className="grid grid-cols-1 gap-7 sm:grid-cols-2 lg:grid-cols-4">
-
             {benefits.map((item) => {
               const Icon = item.icon;
 
               return (
-                <div
-                  key={item.title}
-                  className="flex items-start gap-4"
-                >
+                <div key={item.title} className="flex items-start gap-4">
                   <Icon
                     size={34}
                     strokeWidth={1.5}
@@ -617,9 +589,7 @@ export default function ContactPage() {
                   />
 
                   <div>
-                    <h3 className="mb-2 text-sm font-semibold">
-                      {item.title}
-                    </h3>
+                    <h3 className="mb-2 text-sm font-semibold">{item.title}</h3>
 
                     <p className="text-xs leading-5 text-[#77736B]">
                       {item.description}
@@ -628,7 +598,6 @@ export default function ContactPage() {
                 </div>
               );
             })}
-
           </div>
         </div>
       </section>
@@ -638,9 +607,7 @@ export default function ContactPage() {
       ====================================== */}
 
       <section className="pb-16">
-
         <div className="mx-auto grid max-w-7xl grid-cols-1 gap-5 px-6 lg:grid-cols-[1.3fr_.9fr] lg:px-12">
-
           {/* ATELIER */}
 
           <div
@@ -656,9 +623,7 @@ export default function ContactPage() {
               `,
             }}
           >
-
             <div className="relative max-w-[360px] p-8 text-white">
-
               <p className="mb-4 text-xs font-semibold tracking-[0.4em] text-[#DCC4A0]">
                 NOTRE ATELIER
               </p>
@@ -670,33 +635,26 @@ export default function ContactPage() {
               </h2>
 
               <p className="mb-6 text-sm leading-6 text-[#f0e7d9]">
-                Découvrez nos créations et discutons
-                ensemble de vos projets sur mesure.
-                Les visites se font sur rendez-vous.
+                Découvrez nos créations et discutons ensemble de vos projets sur
+                mesure. Les visites se font sur rendez-vous.
               </p>
 
               <a
                 href="#coordonnees"
-                onClick={(event) => {
-                  if (!CONTACT.googleMaps) {
-                    event.preventDefault();
-                  }
-                }}
                 className="inline-flex items-center gap-3 rounded-full border border-white/80 px-6 py-3 text-xs font-semibold transition hover:bg-white/10"
               >
                 <MapPin size={17} />
                 Nous contacter pour une visite
                 <ArrowRight size={16} />
               </a>
-
             </div>
           </div>
 
           {/* LOCALISATION */}
 
           <div className="relative flex min-h-[320px] items-center justify-center overflow-hidden rounded-xl border border-[#e1d9cd] bg-[#e9e5d8]">
-
-            <div className="pointer-events-none absolute inset-0 opacity-40"
+            <div
+              className="pointer-events-none absolute inset-0 opacity-40"
               style={{
                 backgroundImage:
                   "linear-gradient(30deg, transparent 47%, #aaa990 48%, #aaa990 49%, transparent 50%), linear-gradient(120deg, transparent 47%, #bcb9a5 48%, #bcb9a5 49%, transparent 50%)",
@@ -705,14 +663,10 @@ export default function ContactPage() {
             />
 
             <div className="relative z-10 mx-6 w-full max-w-xs rounded-xl bg-white/95 p-6 text-center shadow-lg">
-
-              <MapPin
-                size={32}
-                className="mx-auto mb-4 text-[#405033]"
-              />
+              <MapPin size={32} className="mx-auto mb-4 text-[#405033]" />
 
               <h3 className="mb-2 font-serif text-xl">
-                RadiWood — Bois d'Olivier
+                RadiWood — Bois d&apos;Olivier
               </h3>
 
               <p className="mb-4 text-sm text-[#77736B]">
@@ -734,14 +688,10 @@ export default function ContactPage() {
                   Localisation exacte disponible prochainement.
                 </p>
               )}
-
             </div>
-
           </div>
-
         </div>
       </section>
-
     </div>
   );
 }

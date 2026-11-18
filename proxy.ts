@@ -1,4 +1,3 @@
-
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 
@@ -6,7 +5,14 @@ const COOKIE_NAME = "radiwood_admin_session";
 
 export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
-  const loginPage = pathname === "/admin/login";
+  const isLoginPage = pathname === "/admin/login";
+  const isLoginApi = pathname === "/api/admin/login";
+  const isApiAdmin = pathname.startsWith("/api/admin");
+
+  // Laisser passer la route API de connexion
+  if (isLoginApi) {
+    return NextResponse.next();
+  }
 
   const token = request.cookies.get(COOKIE_NAME)?.value;
   const secret = process.env.AUTH_SECRET;
@@ -14,19 +20,12 @@ export async function proxy(request: NextRequest) {
 
   let authenticated = false;
 
-  if (
-    token &&
-    secret &&
-    secret.length >= 32 &&
-    adminEmail
-  ) {
+  if (token && secret && secret.length >= 32 && adminEmail) {
     try {
       const result = await jwtVerify(
         token,
         new TextEncoder().encode(secret),
-        {
-          algorithms: ["HS256"],
-        }
+        { algorithms: ["HS256"] }
       );
 
       authenticated =
@@ -37,25 +36,30 @@ export async function proxy(request: NextRequest) {
     }
   }
 
-  // Login accessible sans connexion
-  if (loginPage) {
+  // Page de login : rediriger vers /admin si déjà connecté
+  if (isLoginPage) {
     if (authenticated) {
-      return NextResponse.redirect(
-        new URL("/admin", request.url)
-      );
+      return NextResponse.redirect(new URL("/admin", request.url));
     }
-
     return NextResponse.next();
   }
 
-  // Pages Admin protégées
+  // Routes API Admin non authentifiées -> 401 JSON
+  if (isApiAdmin && !authenticated) {
+    const response = NextResponse.json(
+      { success: false, error: "Non autorisé." },
+      { status: 401 }
+    );
+    response.cookies.delete(COOKIE_NAME);
+    return response;
+  }
+
+  // Pages Admin non authentifiées -> redirection /admin/login
   if (!authenticated) {
     const response = NextResponse.redirect(
       new URL("/admin/login", request.url)
     );
-
     response.cookies.delete(COOKIE_NAME);
-
     return response;
   }
 
@@ -63,5 +67,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/admin/:path*"],
+  matcher: ["/admin/:path*", "/api/admin/:path*"],
 };
